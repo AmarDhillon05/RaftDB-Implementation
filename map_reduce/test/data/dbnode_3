@@ -1,0 +1,102 @@
+{
+ 0: {"brand":"nike","price":149.0}
+ 1: {"brand":"adidas","price":89.0}
+ 2: {"brand":"vans","price":213.0}
+ 3: {"brand":"adidas","price":244.0}
+ 4: {"brand":"new balance","price":97.0}
+ 5: {"brand":"jordan","price":112.0}
+ 6: {"brand":"adidas","price":240.0}
+ 7: {"brand":"adidas","price":241.0}
+ 8: {"brand":"adidas","price":165.0}
+ 9: {"brand":"jordan","price":207.0}
+ 10: {"brand":"vans","price":141.0}
+ 11: {"brand":"adidas","price":201.0}
+ 12: {"brand":"jordan","price":71.0}
+ 13: {"brand":"adidas","price":190.0}
+ 14: {"brand":"vans","price":80.0}
+ 15: {"brand":"new balance","price":175.0}
+ 16: {"brand":"jordan","price":166.0}
+ 17: {"brand":"jordan","price":52.0}
+ 18: {"brand":"jordan","price":189.0}
+ 19: {"brand":"jordan","price":54.0}
+ 20: {"brand":"new balance","price":230.0}
+ 21: {"brand":"new balance","price":71.0}
+ 22: {"brand":"nike","price":112.0}
+ 23: {"brand":"adidas","price":229.0}
+ 24: {"brand":"adidas","price":135.0}
+ 25: {"brand":"jordan","price":154.0}
+ 26: {"brand":"jordan","price":133.0}
+ 27: {"brand":"adidas","price":209.0}
+ 28: {"brand":"adidas","price":194.0}
+ 29: {"brand":"vans","price":161.0}
+ 30: {"brand":"adidas","price":200.0}
+ 31: {"brand":"jordan","price":210.0}
+ 32: {"brand":"new balance","price":155.0}
+ 33: {"brand":"new balance","price":99.0}
+ 34: {"brand":"vans","price":161.0}
+ 35: {"brand":"nike","price":184.0}
+ 36: {"brand":"jordan","price":225.0}
+ 37: {"brand":"nike","price":64.0}
+ 38: {"brand":"vans","price":218.0}
+ 39: {"brand":"new balance","price":168.0}
+ 40: {"brand":"nike","price":132.0}
+ 41: {"brand":"adidas","price":232.0}
+ 42: {"brand":"adidas","price":80.0}
+ 43: {"brand":"new balance","price":224.0}
+ 44: {"brand":"jordan","price":243.0}
+ 45: {"brand":"jordan","price":103.0}
+ 46: {"brand":"new balance","price":124.0}
+ 47: {"brand":"vans","price":163.0}
+ 48: {"brand":"vans","price":227.0}
+ 49: {"brand":"adidas","price":225.0}
+ 50: {"brand":"new balance","price":169.0}
+ 51: {"brand":"nike","price":182.0}
+ 52: {"brand":"vans","price":67.0}
+ 53: {"brand":"jordan","price":85.0}
+ 54: {"brand":"adidas","price":141.0}
+ 55: {"brand":"new balance","price":193.0}
+ 56: {"brand":"new balance","price":178.0}
+ 57: {"brand":"nike","price":141.0}
+ 58: {"brand":"nike","price":68.0}
+ 59: {"brand":"adidas","price":86.0}
+ 60: {"brand":"new balance","price":105.0}
+ 61: {"brand":"nike","price":108.0}
+ 62: {"brand":"nike","price":154.0}
+ 63: {"brand":"jordan","price":111.0}
+ 64: {"brand":"new balance","price":135.0}
+ 65: {"brand":"vans","price":123.0}
+ 66: {"brand":"vans","price":101.0}
+ 67: {"brand":"nike","price":100.0}
+ 68: {"brand":"new balance","price":153.0}
+ 69: {"brand":"nike","price":56.0}
+ 70: {"brand":"nike","price":89.0}
+ 71: {"brand":"vans","price":170.0}
+ 72: {"brand":"adidas","price":76.0}
+ 73: {"brand":"new balance","price":127.0}
+ 74: {"brand":"jordan","price":231.0}
+ 75: {"brand":"nike","price":210.0}
+ 76: {"brand":"jordan","price":205.0}
+ 77: {"brand":"nike","price":168.0}
+ 78: {"brand":"jordan","price":192.0}
+ 79: {"brand":"adidas","price":246.0}
+ 80: {"brand":"vans","price":171.0}
+ 81: {"brand":"nike","price":234.0}
+ 82: {"brand":"adidas","price":77.0}
+ 83: {"brand":"vans","price":90.0}
+ 84: {"brand":"new balance","price":122.0}
+ 85: {"brand":"new balance","price":80.0}
+ 86: {"brand":"new balance","price":197.0}
+ 87: {"brand":"nike","price":80.0}
+ 88: {"brand":"new balance","price":164.0}
+ 89: {"brand":"vans","price":172.0}
+ 90: {"brand":"adidas","price":174.0}
+ 91: {"brand":"adidas","price":85.0}
+ 92: {"brand":"adidas","price":54.0}
+ 93: {"brand":"vans","price":93.0}
+ 94: {"brand":"new balance","price":136.0}
+ 95: {"brand":"nike","price":128.0}
+ 96: {"brand":"vans","price":112.0}
+ 97: {"brand":"adidas","price":133.0}
+ 98: {"brand":"jordan","price":98.0}
+ 99: {"brand":"new balance","price":174.0}
+}
