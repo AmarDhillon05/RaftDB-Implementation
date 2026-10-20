@@ -565,6 +565,376 @@ void testCount3B(){
 }
 
 
+// ---------- 3C: persistence ----------
+
+void testPersist13C(){
+    int servers = 3;
+    RaftTest t(servers, true);
+    t.begin("Test (3C): basic persistence");
+
+    t.one(11, servers, true);
+
+    //Crash and re-start all
+    for(int i = 0; i < servers; i ++){
+        t.start1(i);
+    }
+    for(int i = 0; i < servers; i ++){
+        t.disconnect(i);
+        t.connect(i);
+    }
+
+    t.one(12, servers, true);
+
+    int leader1 = t.checkOneLeader();
+    t.disconnect(leader1);
+    t.start1(leader1);
+    t.connect(leader1);
+
+    t.one(13, servers, true);
+
+    int leader2 = t.checkOneLeader();
+    t.disconnect(leader2);
+    t.one(14, servers - 1, true);
+    t.start1(leader2);
+    t.connect(leader2);
+
+    t.wait(4, servers, -1);   //wait for leader2 to join before killing i3
+
+    int i3 = (t.checkOneLeader() + 1) % servers;
+    t.disconnect(i3);
+    t.one(15, servers - 1, true);
+    t.start1(i3);
+    t.connect(i3);
+
+    t.one(16, servers, true);
+    t.end();
+}
+
+
+void testPersist23C(){
+    int servers = 5;
+    RaftTest t(servers, true);
+    t.begin("Test (3C): more persistence");
+
+    int index = 1;
+    for(int iters = 0; iters < 5; iters ++){
+        t.one(10 + index, servers, true);
+        index ++;
+
+        int leader1 = t.checkOneLeader();
+
+        t.disconnect((leader1 + 1) % servers);
+        t.disconnect((leader1 + 2) % servers);
+
+        t.one(10 + index, servers - 2, true);
+        index ++;
+
+        t.disconnect((leader1 + 0) % servers);
+        t.disconnect((leader1 + 3) % servers);
+        t.disconnect((leader1 + 4) % servers);
+
+        t.start1((leader1 + 1) % servers);
+        t.start1((leader1 + 2) % servers);
+        t.connect((leader1 + 1) % servers);
+        t.connect((leader1 + 2) % servers);
+
+        sleepMs(RAFT_ELECTION_TIMEOUT_MS);
+
+        t.start1((leader1 + 3) % servers);
+        t.connect((leader1 + 3) % servers);
+
+        t.one(10 + index, servers - 2, true);
+        index ++;
+
+        t.connect((leader1 + 4) % servers);
+        t.connect((leader1 + 0) % servers);
+    }
+
+    t.one(1000, servers, true);
+    t.end();
+}
+
+
+void testPersist33C(){
+    int servers = 3;
+    RaftTest t(servers, true);
+    t.begin("Test (3C): partitioned leader and one follower crash, leader restarts");
+
+    t.one(101, 3, true);
+
+    int leader = t.checkOneLeader();
+    t.disconnect((leader + 2) % servers);
+
+    t.one(102, 2, true);
+
+    t.crash1((leader + 0) % servers);
+    t.crash1((leader + 1) % servers);
+    t.connect((leader + 2) % servers);
+    t.start1((leader + 0) % servers);
+    t.connect((leader + 0) % servers);
+
+    t.one(103, 2, true);
+
+    t.start1((leader + 1) % servers);
+    t.connect((leader + 1) % servers);
+
+    t.one(104, servers, true);
+    t.end();
+}
+
+
+//Test the scenarios described in Figure 8 of the extended Raft paper. Each iteration asks a leader,
+//if there is one, to insert a command in the Raft log. If there is a leader, that leader will fail
+//quickly with a high probability (perhaps without committing the command), or crash after a while
+//with low probability (most likely committing the command). If the number of alive servers isn't
+//enough to form a majority, perhaps start a new server. The leader in a new term may try to finish
+//replicating log entries that haven't been committed yet.
+void testFigure83C(){
+    int servers = 5;
+    RaftTest t(servers, true);
+    t.begin("Test (3C): Figure 8");
+
+    t.one(randInt(0, 1 << 30), 1, true);
+
+    int nup = servers;
+    for(int iters = 0; iters < 1000; iters ++){
+        int leader = -1;
+        for(int i = 0; i < servers; i ++){
+            auto rf = t.getRaft(i);
+            if(rf){
+                auto [index, term, ok] = rf->start(randInt(0, 1 << 30));
+                if(ok){
+                    leader = i;
+                }
+            }
+        }
+
+        if(randInt(0, 1000) < 100){
+            sleepMs(randInt(0, RAFT_ELECTION_TIMEOUT_MS / 2));
+        }
+        else {
+            sleepMs(randInt(0, 13));
+        }
+
+        if(leader != -1){
+            t.crash1(leader);
+            nup --;
+        }
+
+        if(nup < 3){
+            int s = randInt(0, servers);
+            if(!t.getRaft(s)){
+                t.start1(s);
+                t.connect(s);
+                nup ++;
+            }
+        }
+    }
+
+    for(int i = 0; i < servers; i ++){
+        if(!t.getRaft(i)){
+            t.start1(i);
+            t.connect(i);
+        }
+    }
+
+    t.one(randInt(0, 1 << 30), servers, true);
+    t.end();
+}
+
+
+void testUnreliableAgree3C(){
+    int servers = 5;
+    RaftTest t(servers, false);
+    t.begin("Test (3C): unreliable agreement");
+
+    vector<thread> threads;
+    for(int iters = 1; iters < 50; iters ++){
+        for(int j = 0; j < 4; j ++){
+            threads.emplace_back([&t, iters, j](){
+                t.one(100 * iters + j, 1, true);
+            });
+        }
+        t.one(iters, 1, true);
+    }
+    for(thread &th : threads){
+        th.join();
+    }
+
+    t.setUnreliable(false);
+    t.one(100, servers, true);
+    t.end();
+}
+
+
+void testFigure8Unreliable3C(){
+    int servers = 5;
+    RaftTest t(servers, false);
+    t.begin("Test (3C): Figure 8 (unreliable)");
+
+    t.one(randInt(0, 10000), 1, true);
+
+    int nup = servers;
+    for(int iters = 0; iters < 1000; iters ++){
+        if(iters == 200){
+            t.setLongReordering(true);
+        }
+
+        int leader = -1;
+        for(int i = 0; i < servers; i ++){
+            auto [index, term, ok] = t.rafts[i]->start(randInt(0, 10000));
+            if(ok && t.connected[i]){
+                leader = i;
+            }
+        }
+
+        if(randInt(0, 1000) < 100){
+            sleepMs(randInt(0, RAFT_ELECTION_TIMEOUT_MS / 2));
+        }
+        else {
+            sleepMs(randInt(0, 13));
+        }
+
+        if(leader != -1 && randInt(0, 1000) < RAFT_ELECTION_TIMEOUT_MS / 2){
+            t.disconnect(leader);
+            nup --;
+        }
+
+        if(nup < 3){
+            int s = randInt(0, servers);
+            if(!t.connected[s]){
+                t.connect(s);
+                nup ++;
+            }
+        }
+    }
+
+    for(int i = 0; i < servers; i ++){
+        if(!t.connected[i]){
+            t.connect(i);
+        }
+    }
+
+    t.one(randInt(0, 10000), servers, true);
+    t.end();
+}
+
+
+//Clients keep submitting while servers get randomly disconnected, crashed and restarted. At the end,
+//everything a client saw committed has to actually be in the final log.
+void internalChurn(bool unreliable){
+    int servers = 5;
+    RaftTest t(servers, !unreliable);
+    if(unreliable){
+        t.begin("Test (3C): unreliable churn");
+    }
+    else {
+        t.begin("Test (3C): churn");
+    }
+
+    atomic<bool> stop{false};
+    int ncli = 3;
+    vector<vector<int>> values(ncli);
+    vector<thread> clients;
+
+    for(int me = 0; me < ncli; me ++){
+        clients.emplace_back([&, me](){
+            while(!stop){
+                int x = randInt(0, 1 << 30);
+                int index = -1;
+                bool ok = false;
+
+                for(int i = 0; i < servers; i ++){
+                    auto rf = t.getRaft(i);
+                    if(rf){
+                        auto [index1, term1, ok1] = rf->start(x);
+                        if(ok1){
+                            ok = true;
+                            index = index1;
+                        }
+                    }
+                }
+
+                if(ok){
+                    //Maybe leader will commit our value, maybe not. But don't wait forever.
+                    for(int to : { 10, 20, 50, 100, 200 }){
+                        auto [nd, cmd] = t.nCommitted(index);
+                        if(nd > 0){
+                            if(cmd == x){
+                                values[me].push_back(x);
+                            }
+                            break;
+                        }
+                        sleepMs(to);
+                    }
+                }
+                else {
+                    sleepMs(79 + me * 17);
+                }
+            }
+        });
+    }
+
+    for(int iters = 0; iters < 20; iters ++){
+        if(randInt(0, 1000) < 200){
+            t.disconnect(randInt(0, servers));
+        }
+
+        if(randInt(0, 1000) < 500){
+            int i = randInt(0, servers);
+            if(!t.getRaft(i)){
+                t.start1(i);
+            }
+            t.connect(i);
+        }
+
+        if(randInt(0, 1000) < 200){
+            int i = randInt(0, servers);
+            if(t.getRaft(i)){
+                t.crash1(i);
+            }
+        }
+
+        //Make crash/restart infrequent enough that the peers can often keep up, but not so infrequent
+        //that everything has settled down from one change to the next
+        sleepMs(RAFT_ELECTION_TIMEOUT_MS * 7 / 10);
+    }
+
+    sleepMs(RAFT_ELECTION_TIMEOUT_MS);
+    t.setUnreliable(false);
+    for(int i = 0; i < servers; i ++){
+        if(!t.getRaft(i)){
+            t.start1(i);
+        }
+        t.connect(i);
+    }
+
+    stop = true;
+    for(thread &c : clients){
+        c.join();
+    }
+
+    sleepMs(RAFT_ELECTION_TIMEOUT_MS);
+
+    int last_index = t.one(randInt(0, 1 << 30), servers, true);
+
+    set<int> really;
+    for(int index = 1; index <= last_index; index ++){
+        json v = t.wait(index, servers, -1);
+        if(v.is_number_integer()){
+            really.insert(v.get<int>());
+        }
+    }
+
+    for(auto &vs : values){
+        for(int v : vs){
+            check(really.count(v), "didn't find a value");
+        }
+    }
+    t.end();
+}
+
+
 int main(int argc, char** argv){
     return runTests({
         { "TestInitialElection3A", testInitialElection3A },
@@ -580,5 +950,13 @@ int main(int argc, char** argv){
         { "TestRejoin3B", testRejoin3B },
         { "TestBackup3B", testBackup3B },
         { "TestCount3B", testCount3B },
+        { "TestPersist13C", testPersist13C },
+        { "TestPersist23C", testPersist23C },
+        { "TestPersist33C", testPersist33C },
+        { "TestFigure83C", testFigure83C },
+        { "TestUnreliableAgree3C", testUnreliableAgree3C },
+        { "TestFigure8Unreliable3C", testFigure8Unreliable3C },
+        { "TestReliableChurn3C", [](){ internalChurn(false); } },
+        { "TestUnreliableChurn3C", [](){ internalChurn(true); } },
     }, argc, argv);
 }

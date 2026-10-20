@@ -113,9 +113,14 @@ struct RaftTest {
         disconnect(i);
         net->deleteServer(to_string(i));
 
-        if(rafts[i]){
-            rafts[i]->kill();
+        shared_ptr<Raft> rf;
+        {
+            lock_guard<mutex> lock(mu);
+            rf = rafts[i];
             rafts[i] = nullptr;
+        }
+        if(rf){
+            rf->kill();
         }
 
         //Copy so anything the dead instance still writes doesn't leak into the next one's "disk"
@@ -154,8 +159,19 @@ struct RaftTest {
         auto ch = apply_chs[i];
         appliers[i] = thread([this, i, ch](){ applier(i, ch); });
 
-        rafts[i] = Raft::make(ends, i, saved[i], apply_chs[i]);
-        net->addServer(to_string(i), rafts[i]->makeServer());
+        auto rf = Raft::make(ends, i, saved[i], apply_chs[i]);
+        {
+            lock_guard<mutex> lock(mu);
+            rafts[i] = rf;
+        }
+        net->addServer(to_string(i), rf->makeServer());
+    }
+
+
+    //rafts[] changes under crash1/start1, so anything running on another thread should read it through here
+    shared_ptr<Raft> getRaft(int i){
+        lock_guard<mutex> lock(mu);
+        return rafts[i];
     }
 
 
@@ -305,7 +321,8 @@ struct RaftTest {
             }
 
             if(start_term > -1){
-                for(auto &rf : rafts){
+                for(int i = 0; i < n; i ++){
+                    auto rf = getRaft(i);
                     if(rf && rf->getState().first > start_term){
                         return -1;
                     }
@@ -335,7 +352,7 @@ struct RaftTest {
                 starts = (starts + 1) % n;
                 shared_ptr<Raft> rf;
                 if(connected[starts]){
-                    rf = rafts[starts];
+                    rf = getRaft(starts);
                 }
                 if(rf){
                     auto [idx, term, ok] = rf->start(cmd);

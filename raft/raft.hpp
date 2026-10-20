@@ -103,6 +103,7 @@ class Raft : public enable_shared_from_this<Raft> {
 
             log.push_back({ current_term, command });
             match_index[me] = lastLogIndex();
+            persist();
 
             //Send it out now instead of waiting for the next heartbeat, so commits are quick
             broadcastAppendEntries();
@@ -158,6 +159,9 @@ class Raft : public enable_shared_from_this<Raft> {
             next_index.resize(peers.size(), 1);
             match_index.resize(peers.size(), 0);
             resetElectionTimer();
+
+            //Pick up wherever we were before a crash
+            readPersist(persister->readRaftState());
         }
 
 
@@ -165,6 +169,39 @@ class Raft : public enable_shared_from_this<Raft> {
             auto self = shared_from_this();
             thread([self](){ self->ticker(); }).detach();
             thread([self](){ self->applier(); }).detach();
+        }
+
+
+        // ---------- persistence ----------
+
+        //Saves everything Figure 2 marks as persistent. Has to happen before we answer any RPC or
+        //send anything that depends on it - e.g. if we vote, crash, and forget we voted, we could vote
+        //twice in one term and get two leaders.
+        //Caller holds mu
+        void persist(){
+            json state;
+            state["current_term"] = current_term;
+            state["voted_for"] = voted_for;
+            state["log"] = json::array();
+            for(LogEntry &entry : log){
+                state["log"].push_back({ { "term", entry.term }, { "command", entry.command } });
+            }
+            persister->save(state.dump(), persister->readSnapshot());
+        }
+
+
+        void readPersist(string data){
+            if(data.empty()){
+                return;   //fresh start, nothing saved yet
+            }
+
+            json state = json::parse(data);
+            current_term = state["current_term"];
+            voted_for = state["voted_for"];
+            log.clear();
+            for(json &entry : state["log"]){
+                log.push_back({ entry["term"], entry["command"] });
+            }
         }
 
 
@@ -211,6 +248,7 @@ class Raft : public enable_shared_from_this<Raft> {
             current_term = term;
             voted_for = -1;
             state = FOLLOWER;
+            persist();
         }
 
 
@@ -246,6 +284,7 @@ class Raft : public enable_shared_from_this<Raft> {
             current_term ++;
             voted_for = me;
             resetElectionTimer();
+            persist();
 
             int term = current_term;
             auto votes = make_shared<int>(1);   //shared between the vote threads, guarded by mu
@@ -329,6 +368,7 @@ class Raft : public enable_shared_from_this<Raft> {
             if(grant){
                 voted_for = candidate;
                 resetElectionTimer();   //only reset when we actually vote, or we could stall elections
+                persist();
             }
 
             reply["term"] = current_term;
@@ -502,6 +542,7 @@ class Raft : public enable_shared_from_this<Raft> {
             //Logs match up to prev_index. Add the new entries, but only cut our log at an actual
             //conflict - an old, delayed AppendEntries must not erase entries a newer one already added
             int index = prev_index;
+            bool changed = false;
             for(const json &entry : args["entries"]){
                 index ++;
                 int entry_term = entry["term"];
@@ -513,6 +554,10 @@ class Raft : public enable_shared_from_this<Raft> {
                     log.resize(index);   //conflict - drop this entry and everything after
                 }
                 log.push_back({ entry_term, entry["command"] });
+                changed = true;
+            }
+            if(changed){
+                persist();
             }
 
             //index is now the last entry this RPC covered - we can only commit up to there, since
