@@ -24,13 +24,20 @@ using namespace std;
 //  start(command)   -> leader appends it to the log, returns (index, term, is_leader) right away
 //  apply channel    -> once a command is committed, every server sends an ApplyMsg for it, in order
 //  getState()       -> (term, am I the leader)
+//  snapshot(i, s)   -> service saved its state up through index i in s, so raft can drop that part of the log
 
 
-//What gets sent up to the service on the apply channel
+//What gets sent up to the service on the apply channel - either one committed command, or a snapshot
+//from the leader that the service should load in place of everything up through snapshot_index
 struct ApplyMsg {
     bool command_valid = false;
     json command;
     int command_index = 0;
+
+    bool snapshot_valid = false;
+    string snapshot;
+    int snapshot_term = 0;
+    int snapshot_index = 0;
 };
 
 
@@ -83,6 +90,10 @@ class Raft : public enable_shared_from_this<Raft> {
                 auto rf = weak.lock();
                 return rf ? rf->appendEntries(args) : json();
             });
+            server->addHandler("Raft.InstallSnapshot", [weak](json args){
+                auto rf = weak.lock();
+                return rf ? rf->installSnapshot(args) : json();
+            });
             return server;
         }
 
@@ -111,6 +122,31 @@ class Raft : public enable_shared_from_this<Raft> {
         }
 
 
+        //The service has saved everything up through index into data, so we can throw away that part
+        //of the log (log compaction). Only ever called for indices the service already applied.
+        void snapshot(int index, string data){
+            lock_guard<mutex> lock(mu);
+            if(index <= snapshot_index || index > commit_index){
+                return;   //old, or we don't even know it's committed
+            }
+
+            //Drop everything before index - log[0] becomes the dummy standing in for the snapshot
+            int term = termAt(index);
+            log.erase(log.begin(), log.begin() + (index - snapshot_index));
+            log[0].command = json();
+            snapshot_index = index;
+            snapshot_term = term;
+
+            persist(data);
+        }
+
+
+        //How big the persisted state is, so the kv server knows when to snapshot
+        int persistedSize(){
+            return persister->raftStateSize();
+        }
+
+
         void kill(){
             dead = true;
             apply_cond.notify_all();
@@ -134,7 +170,9 @@ class Raft : public enable_shared_from_this<Raft> {
         //Persistent state (Figure 2)
         int current_term = 0;
         int voted_for = -1;
-        vector<LogEntry> log;      //log[0] is a dummy so real entries start at index 1
+        vector<LogEntry> log;      //log[0] is a dummy standing in for the snapshot (index snapshot_index)
+        int snapshot_index = 0;    //last index covered by the snapshot - log[i] is really index snapshot_index + i
+        int snapshot_term = 0;
 
         //Volatile state
         RaftState state = FOLLOWER;
@@ -179,14 +217,22 @@ class Raft : public enable_shared_from_this<Raft> {
         //twice in one term and get two leaders.
         //Caller holds mu
         void persist(){
+            persist(persister->readSnapshot());
+        }
+
+
+        //Raft state and snapshot always get saved together, so they can never get out of sync
+        void persist(string snapshot_data){
             json state;
             state["current_term"] = current_term;
             state["voted_for"] = voted_for;
+            state["snapshot_index"] = snapshot_index;
+            state["snapshot_term"] = snapshot_term;
             state["log"] = json::array();
             for(LogEntry &entry : log){
                 state["log"].push_back({ { "term", entry.term }, { "command", entry.command } });
             }
-            persister->save(state.dump(), persister->readSnapshot());
+            persister->save(state.dump(), snapshot_data);
         }
 
 
@@ -198,6 +244,13 @@ class Raft : public enable_shared_from_this<Raft> {
             json state = json::parse(data);
             current_term = state["current_term"];
             voted_for = state["voted_for"];
+            snapshot_index = state["snapshot_index"];
+            snapshot_term = state["snapshot_term"];
+
+            //Everything in the snapshot was committed + applied (the service reloads it itself on startup)
+            commit_index = snapshot_index;
+            last_applied = snapshot_index;
+
             log.clear();
             for(json &entry : state["log"]){
                 log.push_back({ entry["term"], entry["command"] });
@@ -207,8 +260,11 @@ class Raft : public enable_shared_from_this<Raft> {
 
         // ---------- log helpers ----------
 
+        //Everything takes real log indices - these translate to positions in the log vector
+        //(only valid for index >= snapshot_index, anything earlier is gone)
+
         int lastLogIndex(){
-            return log.size() - 1;
+            return snapshot_index + log.size() - 1;
         }
 
         int lastLogTerm(){
@@ -216,13 +272,17 @@ class Raft : public enable_shared_from_this<Raft> {
         }
 
         int termAt(int index){
-            return log[index].term;
+            return log[index - snapshot_index].term;
+        }
+
+        json commandAt(int index){
+            return log[index - snapshot_index].command;
         }
 
 
         //Last index in our log with this term, or -1 if we don't have any entries from it
         int lastIndexOfTerm(int term){
-            for(int i = lastLogIndex(); i > 0; i --){
+            for(int i = lastLogIndex(); i > snapshot_index; i --){
                 if(termAt(i) == term){
                     return i;
                 }
@@ -393,6 +453,13 @@ class Raft : public enable_shared_from_this<Raft> {
         //right before it so the follower can check its log matches ours up to that point
         //Caller holds mu
         void sendAppendEntries(int peer){
+
+            //The entries this peer needs are already compacted away - send the snapshot instead
+            if(next_index[peer] <= snapshot_index){
+                sendInstallSnapshot(peer);
+                return;
+            }
+
             int prev_index = next_index[peer] - 1;
 
             json args;
@@ -403,7 +470,7 @@ class Raft : public enable_shared_from_this<Raft> {
             args["leader_commit"] = commit_index;
             args["entries"] = json::array();
             for(int i = prev_index + 1; i <= lastLogIndex(); i ++){
-                args["entries"].push_back({ { "term", termAt(i) }, { "command", log[i].command } });
+                args["entries"].push_back({ { "term", termAt(i) }, { "command", commandAt(i) } });
             }
 
             auto self = shared_from_this();
@@ -516,9 +583,22 @@ class Raft : public enable_shared_from_this<Raft> {
 
             int prev_index = args["prev_log_index"];
             int prev_term = args["prev_log_term"];
+            json entries = args["entries"];
             reply["term"] = current_term;
             reply["success"] = false;
             reply["x_len"] = lastLogIndex() + 1;
+
+            //Part of what was sent is already in our snapshot (committed, so it has to match) - skip that part
+            if(prev_index < snapshot_index){
+                int skip = snapshot_index - prev_index;
+                if(skip >= entries.size()){
+                    reply["success"] = true;
+                    return reply;
+                }
+                entries.erase(entries.begin(), entries.begin() + skip);
+                prev_index = snapshot_index;
+                prev_term = snapshot_term;
+            }
 
             //Our log is too short to have prev_index at all
             if(prev_index > lastLogIndex()){
@@ -531,7 +611,7 @@ class Raft : public enable_shared_from_this<Raft> {
             if(termAt(prev_index) != prev_term){
                 int x_term = termAt(prev_index);
                 int x_index = prev_index;
-                while(x_index - 1 > 0 && termAt(x_index - 1) == x_term){
+                while(x_index - 1 > snapshot_index && termAt(x_index - 1) == x_term){
                     x_index --;
                 }
                 reply["x_term"] = x_term;
@@ -543,7 +623,7 @@ class Raft : public enable_shared_from_this<Raft> {
             //conflict - an old, delayed AppendEntries must not erase entries a newer one already added
             int index = prev_index;
             bool changed = false;
-            for(const json &entry : args["entries"]){
+            for(const json &entry : entries){
                 index ++;
                 int entry_term = entry["term"];
 
@@ -551,7 +631,7 @@ class Raft : public enable_shared_from_this<Raft> {
                     if(termAt(index) == entry_term){
                         continue;
                     }
-                    log.resize(index);   //conflict - drop this entry and everything after
+                    log.resize(index - snapshot_index);   //conflict - drop this entry and everything after
                 }
                 log.push_back({ entry_term, entry["command"] });
                 changed = true;
@@ -564,7 +644,7 @@ class Raft : public enable_shared_from_this<Raft> {
             //anything past it in our log isn't known to match the leader
             int leader_commit = args["leader_commit"];
             if(leader_commit > commit_index){
-                commit_index = min(leader_commit, index);
+                commit_index = max(commit_index, min(leader_commit, index));
                 apply_cond.notify_all();
             }
 
@@ -573,20 +653,116 @@ class Raft : public enable_shared_from_this<Raft> {
         }
 
 
+        // ---------- snapshots ----------
+
+        //Caller holds mu
+        void sendInstallSnapshot(int peer){
+            json args;
+            args["term"] = current_term;
+            args["leader_id"] = me;
+            args["last_included_index"] = snapshot_index;
+            args["last_included_term"] = snapshot_term;
+            args["data"] = persister->readSnapshot();
+
+            auto self = shared_from_this();
+            thread([self, peer, args](){
+                json reply;
+                if(!self->peers[peer]->call("Raft.InstallSnapshot", args, reply)){
+                    return;
+                }
+
+                lock_guard<mutex> lock(self->mu);
+                int reply_term = reply["term"];
+                if(reply_term > self->current_term){
+                    self->stepDown(reply_term);
+                    return;
+                }
+                if(self->state != LEADER || self->current_term != args["term"].get<int>()){
+                    return;
+                }
+
+                //Peer now has everything through the snapshot
+                int last_included = args["last_included_index"];
+                self->match_index[peer] = max(self->match_index[peer], last_included);
+                self->next_index[peer] = max(self->next_index[peer], self->match_index[peer] + 1);
+            }).detach();
+        }
+
+
+        //RPC handler: the leader is sending its snapshot because we're too far behind for its log
+        json installSnapshot(json args){
+            lock_guard<mutex> lock(mu);
+            int term = args["term"];
+            int last_included_index = args["last_included_index"];
+            int last_included_term = args["last_included_term"];
+            json reply;
+
+            if(term > current_term){
+                stepDown(term);
+            }
+            reply["term"] = current_term;
+            if(term < current_term){
+                return reply;
+            }
+            state = FOLLOWER;
+            resetElectionTimer();
+
+            //We already have (and committed) everything this covers
+            if(last_included_index <= commit_index){
+                return reply;
+            }
+
+            //If our log has the snapshot's last entry, keep whatever comes after it (Figure 13 step 6),
+            //otherwise our whole log is outdated
+            if(last_included_index <= lastLogIndex() && termAt(last_included_index) == last_included_term){
+                log.erase(log.begin(), log.begin() + (last_included_index - snapshot_index));
+                log[0].command = json();
+            }
+            else {
+                log.clear();
+                log.push_back({ last_included_term, json() });
+            }
+
+            snapshot_index = last_included_index;
+            snapshot_term = last_included_term;
+            commit_index = last_included_index;
+            persist(args["data"].get<string>());
+
+            //The applier sees last_applied < snapshot_index and sends it up to the service
+            apply_cond.notify_all();
+            return reply;
+        }
+
+
         // ---------- applying ----------
 
-        //Background loop - sends newly committed entries up the apply channel, in order.
-        //The channel push happens without holding mu so the service can call back into us freely.
+        //Background loop - sends newly committed entries (or a newly installed snapshot) up the apply
+        //channel, in order. Only this thread ever pushes, so nothing can get delivered out of order.
+        //The push happens without holding mu so the service can call back into us freely.
         void applier(){
             unique_lock<mutex> lock(mu);
 
             while(!killed()){
-                if(last_applied < commit_index){
+
+                //A snapshot from the leader jumped us past what we've applied - deliver it first
+                if(last_applied < snapshot_index){
+                    ApplyMsg msg;
+                    msg.snapshot_valid = true;
+                    msg.snapshot = persister->readSnapshot();
+                    msg.snapshot_term = snapshot_term;
+                    msg.snapshot_index = snapshot_index;
+                    last_applied = snapshot_index;
+
+                    lock.unlock();
+                    apply_ch->push(msg);
+                    lock.lock();
+                }
+                else if(last_applied < commit_index){
                     vector<ApplyMsg> msgs;
                     for(int i = last_applied + 1; i <= commit_index; i ++){
                         ApplyMsg msg;
                         msg.command_valid = true;
-                        msg.command = log[i].command;
+                        msg.command = commandAt(i);
                         msg.command_index = i;
                         msgs.push_back(msg);
                     }

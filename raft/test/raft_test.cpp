@@ -935,6 +935,150 @@ void internalChurn(bool unreliable){
 }
 
 
+// ---------- 3D: snapshots ----------
+
+//Shared body for the snapshot tests - keeps a victim server disconnected or crashed while the others
+//commit enough to snapshot past it, then brings it back so it has to catch up from a snapshot
+void snapCommon(string name, bool disconnect, bool reliable, bool crash){
+    int iters = 30;
+    int servers = 3;
+    RaftTest t(servers, reliable, true);
+    t.begin(name);
+
+    t.one(randInt(0, 1 << 30), servers, true);
+    int leader1 = t.checkOneLeader();
+
+    for(int i = 0; i < iters; i ++){
+        int victim = (leader1 + 1) % servers;
+        int sender = leader1;
+        if(i % 3 == 1){
+            sender = (leader1 + 1) % servers;
+            victim = leader1;
+        }
+
+        if(disconnect){
+            t.disconnect(victim);
+            t.one(randInt(0, 1 << 30), servers - 1, true);
+        }
+        if(crash){
+            t.crash1(victim);
+            t.one(randInt(0, 1 << 30), servers - 1, true);
+        }
+
+        //Perhaps send enough to get a snapshot
+        int nn = SNAPSHOT_INTERVAL / 2 + randInt(0, SNAPSHOT_INTERVAL);
+        for(int j = 0; j < nn; j ++){
+            auto rf = t.getRaft(sender);
+            if(rf){
+                rf->start(randInt(0, 1 << 30));
+            }
+        }
+
+        //Let applier threads catch up with the start()s
+        if(!disconnect && !crash){
+            t.one(randInt(0, 1 << 30), servers, true);   //make sure all followers have caught up
+        }
+        else {
+            t.one(randInt(0, 1 << 30), servers - 1, true);
+        }
+
+        check(t.logSize() < MAX_LOG_SIZE, "log size too large (" + to_string(t.logSize()) + ")");
+
+        if(disconnect){
+            //Reconnect a follower, who maybe behind and needs to receive a snapshot to catch up
+            t.connect(victim);
+            t.one(randInt(0, 1 << 30), servers, true);
+            leader1 = t.checkOneLeader();
+        }
+        if(crash){
+            t.start1(victim);
+            t.connect(victim);
+            t.one(randInt(0, 1 << 30), servers, true);
+            leader1 = t.checkOneLeader();
+        }
+    }
+    t.end();
+}
+
+
+//Crash and restart all servers repeatedly, they should come back from their snapshots
+void testSnapshotAllCrash3D(){
+    int servers = 3;
+    int iters = 5;
+    RaftTest t(servers, false, true);
+    t.begin("Test (3D): crash and restart all servers");
+
+    t.one(randInt(0, 1 << 30), servers, true);
+
+    for(int i = 0; i < iters; i ++){
+        //Perhaps enough to get a snapshot
+        int nn = SNAPSHOT_INTERVAL / 2 + randInt(0, SNAPSHOT_INTERVAL);
+        for(int j = 0; j < nn; j ++){
+            t.one(randInt(0, 1 << 30), servers, true);
+        }
+
+        int index1 = t.one(randInt(0, 1 << 30), servers, true);
+
+        //Crash all
+        for(int j = 0; j < servers; j ++){
+            t.crash1(j);
+        }
+
+        //Revive all
+        for(int j = 0; j < servers; j ++){
+            t.start1(j);
+            t.connect(j);
+        }
+
+        int index2 = t.one(randInt(0, 1 << 30), servers, true);
+        check(index2 >= index1 + 1, "index decreased from " + to_string(index1) + " to " + to_string(index2));
+    }
+    t.end();
+}
+
+
+//Do servers correctly initialize their in-memory copy of the snapshot, making sure that future
+//writes to persistent state don't lose state?
+void testSnapshotInit3D(){
+    int servers = 3;
+    RaftTest t(servers, false, true);
+    t.begin("Test (3D): snapshot initialization after crash");
+
+    t.one(randInt(0, 1 << 30), servers, true);
+
+    //Enough ops to make a snapshot
+    int nn = SNAPSHOT_INTERVAL + 1;
+    for(int i = 0; i < nn; i ++){
+        t.one(randInt(0, 1 << 30), servers, true);
+    }
+
+    //Crash all
+    for(int i = 0; i < servers; i ++){
+        t.crash1(i);
+    }
+    for(int i = 0; i < servers; i ++){
+        t.start1(i);
+        t.connect(i);
+    }
+
+    //A single op, to get something to be written back to persistent storage
+    t.one(randInt(0, 1 << 30), servers, true);
+
+    //Crash all again
+    for(int i = 0; i < servers; i ++){
+        t.crash1(i);
+    }
+    for(int i = 0; i < servers; i ++){
+        t.start1(i);
+        t.connect(i);
+    }
+
+    //Do another op to trigger potential bug
+    t.one(randInt(0, 1 << 30), servers, true);
+    t.end();
+}
+
+
 int main(int argc, char** argv){
     return runTests({
         { "TestInitialElection3A", testInitialElection3A },
@@ -958,5 +1102,12 @@ int main(int argc, char** argv){
         { "TestFigure8Unreliable3C", testFigure8Unreliable3C },
         { "TestReliableChurn3C", [](){ internalChurn(false); } },
         { "TestUnreliableChurn3C", [](){ internalChurn(true); } },
+        { "TestSnapshotBasic3D", [](){ snapCommon("Test (3D): snapshots basic", false, true, false); } },
+        { "TestSnapshotInstall3D", [](){ snapCommon("Test (3D): install snapshots (disconnect)", true, true, false); } },
+        { "TestSnapshotInstallUnreliable3D", [](){ snapCommon("Test (3D): install snapshots (disconnect+unreliable)", true, false, false); } },
+        { "TestSnapshotInstallCrash3D", [](){ snapCommon("Test (3D): install snapshots (crash)", false, true, true); } },
+        { "TestSnapshotInstallUnCrash3D", [](){ snapCommon("Test (3D): install snapshots (unreliable+crash)", false, false, true); } },
+        { "TestSnapshotAllCrash3D", testSnapshotAllCrash3D },
+        { "TestSnapshotInit3D", testSnapshotInit3D },
     }, argc, argv);
 }

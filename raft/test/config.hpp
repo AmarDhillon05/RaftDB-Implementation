@@ -22,9 +22,17 @@ using namespace std;
 //that every server applies the same command at the same index.
 
 
+//In snapshot mode, the test's applier snapshots every this many entries
+const int SNAPSHOT_INTERVAL = 10;
+
+//Persisted raft state should never get bigger than this in snapshot mode (it'd mean the log isn't being trimmed)
+const int MAX_LOG_SIZE = 2000;
+
+
 struct RaftTest {
 
     int n;
+    bool snapshot_mode;
     shared_ptr<Network> net = make_shared<Network>();
     vector<shared_ptr<Raft>> rafts;
     vector<bool> connected;
@@ -44,8 +52,9 @@ struct RaftTest {
     int max_index0 = 0;
 
 
-    RaftTest(int n, bool reliable){
+    RaftTest(int n, bool reliable, bool snapshot_mode = false){
         this->n = n;
+        this->snapshot_mode = snapshot_mode;
         net->setReliable(reliable);
         net->setLongDelays(true);
 
@@ -83,11 +92,16 @@ struct RaftTest {
             if(!msg){
                 return;
             }
+            if(msg->snapshot_valid){
+                lock_guard<mutex> lock(mu);
+                ingestSnapshot(i, msg->snapshot, msg->snapshot_index);
+                continue;
+            }
             if(!msg->command_valid){
                 continue;
             }
 
-            lock_guard<mutex> lock(mu);
+            unique_lock<mutex> lock(mu);
             int index = msg->command_index;
 
             for(int j = 0; j < n; j ++){
@@ -102,7 +116,56 @@ struct RaftTest {
             logs[i][index] = msg->command;
             last_applied[i] = index;
             max_index = max(max_index, index);
+
+            //Snapshot mode - act like a service and hand raft a snapshot every so often. The snapshot
+            //is just every command so far, so a server restored from it has the full history.
+            if(snapshot_mode && (index + 1) % SNAPSHOT_INTERVAL == 0){
+                json snap;
+                snap["last_index"] = index;
+                snap["log"] = json::array();
+                snap["log"].push_back(nullptr);
+                for(int j = 1; j <= index; j ++){
+                    snap["log"].push_back(logs[i].count(j) ? logs[i][j] : json());
+                }
+                auto rf = rafts[i];
+                lock.unlock();
+
+                if(rf){
+                    rf->snapshot(index, snap.dump());
+                }
+            }
         }
+    }
+
+
+    //Load a snapshot as server i's applied history (either from raft on the apply channel, or from its
+    //persister on restart). Caller holds mu
+    void ingestSnapshot(int i, string data, int index){
+        if(data.empty()){
+            return;
+        }
+        json snap = json::parse(data);
+        int last_index = snap["last_index"];
+        check(index == -1 || index == last_index, "server " + to_string(i) + " snapshot doesn't match index");
+
+        logs[i].clear();
+        for(int j = 1; j <= last_index; j ++){
+            logs[i][j] = snap["log"][j];
+        }
+        last_applied[i] = last_index;
+        max_index = max(max_index, last_index);
+    }
+
+
+    //Biggest persisted raft state across servers
+    int logSize(){
+        int biggest = 0;
+        for(int i = 0; i < n; i ++){
+            if(saved[i]){
+                biggest = max(biggest, saved[i]->raftStateSize());
+            }
+        }
+        return biggest;
     }
 
 
@@ -153,6 +216,7 @@ struct RaftTest {
         {
             lock_guard<mutex> lock(mu);
             last_applied[i] = 0;
+            ingestSnapshot(i, saved[i]->readSnapshot(), -1);
         }
 
         apply_chs[i] = make_shared<Channel<ApplyMsg>>();
