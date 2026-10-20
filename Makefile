@@ -54,7 +54,19 @@ $(BUILD)/raft_test: raft/test/raft_test.cpp $(RAFT_HEADERS)
 test-raft: $(BUILD)/raft_test
 	./$(BUILD)/raft_test $(T)
 
+# ---------- Lab 4: fault tolerant kv on raft ----------
+
+KVRAFT_HEADERS = $(RAFT_HEADERS) common/kv.hpp common/linearizability.hpp $(wildcard kvraft/*.hpp) kvraft/test/group.hpp
+
+$(BUILD)/kvraft_test: kvraft/test/kvraft_test.cpp $(KVRAFT_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+# make test-kvraft T=4B runs just the 4B tests
+test-kvraft: $(BUILD)/kvraft_test
+	./$(BUILD)/kvraft_test $(T)
+
 clean:
 	rm -rf $(BUILD) mr-tmp
 
-.PHONY: mr test-mr test-kvsrv test-raft clean
+.PHONY: mr test-mr test-kvsrv test-raft test-kvraft clean
