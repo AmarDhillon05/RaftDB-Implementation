@@ -81,7 +81,7 @@ class ClientEnd {
 
     public:
 
-        ClientEnd(Network* net, string name){
+        ClientEnd(shared_ptr<Network> net, string name){
             this->net = net;
             this->name = name;
         }
@@ -93,19 +93,21 @@ class ClientEnd {
 
     private:
 
-        Network* net;
+        //Ends keep the network alive, so a call still in flight after a test ends doesn't hit freed memory
+        shared_ptr<Network> net;
 
 };
 
 
-class Network {
+//Always make one with make_shared<Network>() since ends hold a shared_ptr back to it
+class Network : public enable_shared_from_this<Network> {
 
     public:
 
         //Make a new client end, it starts disabled + not connected to anything
         shared_ptr<ClientEnd> makeEnd(string endname){
             lock_guard<mutex> lock(mu);
-            auto end = make_shared<ClientEnd>(this, endname);
+            auto end = make_shared<ClientEnd>(shared_from_this(), endname);
             enabled[endname] = false;
             return end;
         }
@@ -213,6 +215,11 @@ class Network {
             }
 
             json result = server->dispatch(method, args);
+
+            //A handler returns null when the thing behind it is already gone (killed) - no reply
+            if(result.is_null()){
+                return false;
+            }
 
             //If the server got killed/replaced or cut off while the handler ran, the reply is lost
             {

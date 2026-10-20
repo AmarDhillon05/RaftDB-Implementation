@@ -12,20 +12,20 @@ using namespace std;
 
 //Test setup - one kv server on a fake network, plus helpers to make clients
 struct KVTest {
-    Network net;
+    shared_ptr<Network> net = make_shared<Network>();
     KVServer kv;
     atomic<int> n_clerks{0};
 
     KVTest(bool reliable){
-        net.addServer("server", kv.makeServer());
-        net.setReliable(reliable);
+        net->addServer("server", kv.makeServer());
+        net->setReliable(reliable);
     }
 
     unique_ptr<Clerk> makeClerk(){
         string name = "client" + to_string(n_clerks ++);
-        auto end = net.makeEnd(name);
-        net.connect(name, "server");
-        net.enable(name, true);
+        auto end = net->makeEnd(name);
+        net->connect(name, "server");
+        net->enable(name, true);
         return make_unique<Clerk>(end);
     }
 };

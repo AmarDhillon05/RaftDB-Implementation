@@ -42,7 +42,19 @@ $(BUILD)/kvsrv_test: kvsrv/test/kvsrv_test.cpp $(KVSRV_HEADERS)
 test-kvsrv: $(BUILD)/kvsrv_test
 	./$(BUILD)/kvsrv_test
 
+# ---------- Lab 3: raft ----------
+
+RAFT_HEADERS = common/labrpc.hpp common/testing.hpp common/channel.hpp $(wildcard raft/*.hpp) raft/test/config.hpp
+
+$(BUILD)/raft_test: raft/test/raft_test.cpp $(RAFT_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+# make test-raft T=3A runs just the 3A tests
+test-raft: $(BUILD)/raft_test
+	./$(BUILD)/raft_test $(T)
+
 clean:
 	rm -rf $(BUILD) mr-tmp
 
-.PHONY: mr test-mr test-kvsrv clean
+.PHONY: mr test-mr test-kvsrv test-raft clean
