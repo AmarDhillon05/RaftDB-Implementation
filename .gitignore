@@ -1,0 +1,4 @@
+build/
+mr-tmp/
+*.o
+*.so
