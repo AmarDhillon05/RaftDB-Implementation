@@ -31,7 +31,18 @@ $(BUILD)/create_data: map_reduce/test/create_data.cpp
 test-mr: mr
 	bash map_reduce/test/test-mr.sh
 
+# ---------- Lab 2: key/value server ----------
+
+KVSRV_HEADERS = common/labrpc.hpp common/testing.hpp common/kv.hpp $(wildcard kvsrv/*.hpp)
+
+$(BUILD)/kvsrv_test: kvsrv/test/kvsrv_test.cpp $(KVSRV_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+test-kvsrv: $(BUILD)/kvsrv_test
+	./$(BUILD)/kvsrv_test
+
 clean:
 	rm -rf $(BUILD) mr-tmp
 
-.PHONY: mr test-mr clean
+.PHONY: mr test-mr test-kvsrv clean
