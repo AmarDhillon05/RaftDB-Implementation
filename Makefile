@@ -66,7 +66,19 @@ $(BUILD)/kvraft_test: kvraft/test/kvraft_test.cpp $(KVRAFT_HEADERS)
 test-kvraft: $(BUILD)/kvraft_test
 	./$(BUILD)/kvraft_test $(T)
 
+# ---------- Lab 5: sharded kv ----------
+
+SHARDKV_HEADERS = $(KVRAFT_HEADERS) $(wildcard shardkv/*.hpp) $(wildcard shardkv/shardgrp/*.hpp)
+
+$(BUILD)/shardkv_test: shardkv/test/shardkv_test.cpp $(SHARDKV_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+# make test-shardkv T=5A runs just the 5A tests
+test-shardkv: $(BUILD)/shardkv_test
+	./$(BUILD)/shardkv_test $(T)
+
 clean:
 	rm -rf $(BUILD) mr-tmp
 
-.PHONY: mr test-mr test-kvsrv test-raft test-kvraft clean
+.PHONY: mr test-mr test-kvsrv test-raft test-kvraft test-shardkv clean
